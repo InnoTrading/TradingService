@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: trading_container
+    environment:
+      - POSTGRES_USER=${USER_NAME_TRADING}
+      - POSTGRES_PASSWORD=${PASSWORD_TRADING}
+      - POSTGRES_DB=${DB_TRADING}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+volumes:
+  pgdata:

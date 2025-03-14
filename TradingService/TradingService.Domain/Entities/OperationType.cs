@@ -1,8 +1,7 @@
-﻿namespace TradingService.Domain.Entitites
+﻿namespace TradingService.Domain.Entitites;
+
+public enum OperationType
 {
-    public enum OperationType
-    {
-        Buy, 
-        Sell
-    }
+    Buy,
+    Sell
 }

@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <UserSecretsId>ce92acf3-d6f0-4f1d-a51e-ed0fb22b71cd</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -12,7 +13,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Folder Include="Controllers\" />
+    <ProjectReference Include="..\TradingService.Application\TradingService.Application.csproj" />
+    <ProjectReference Include="..\TradingService.Infrastructure\TradingService.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>
