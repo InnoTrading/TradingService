@@ -53,17 +53,20 @@ public class OrdersManager(
 
     public async Task<bool> CancelAnOrder(Guid id)
     {
-        if (!_activeOrdersStore.ActiveOrders.TryRemove(id, out var order))
-        {
-            order = await _unitOfWork.Orders.GetByIdAsync(id);
-        }
+        if (!_activeOrdersStore.ActiveOrders.ContainsKey(id))
+            return false;
+
+        var order = await _unitOfWork.Orders.GetByIdAsync(id);        
 
         if (order == null || order.IsCompleted)
             return false;
 
         order.IsActive = false;
         _logger.LogInformation("Order {OrderId} cancelled, removed from active orders.", id);
-        await _unitOfWork.CommitAsync();
+        if(_activeOrdersStore.ActiveOrders.TryRemove(id, out var deleted))
+        {
+            await _unitOfWork.CommitAsync();
+        }
         return true;
     }
 
@@ -74,9 +77,11 @@ public class OrdersManager(
         return await _unitOfWork.Orders.GetByIdAsync(id);
     }
 
-    public async Task<IEnumerable<OrderEntity>> GetUserOrders(string userId)
+    public Task<IEnumerable<OrderEntity>> GetUserOrdersAsync(string userId)
     {
-        return _activeOrdersStore.ActiveOrders.Values.Where(o => o.UserId == userId);
+        var result = _activeOrdersStore.ActiveOrders.Values
+                        .Where(o => o.UserId == userId);
+        return Task.FromResult(result);
     }
 
     public async Task ExecuteOrder(OrderEntity order)
@@ -89,5 +94,7 @@ public class OrdersManager(
         _logger.LogInformation("Order {OrderId} executed and removed from active orders.", order.Id);
     }
 
-    public IEnumerable<OrderEntity> GetActiveOrders() => _activeOrdersStore.ActiveOrders.Values;
+    public Task<IEnumerable<OrderEntity>> GetActiveOrdersAsync()
+     => Task.FromResult(_activeOrdersStore.ActiveOrders.Values.AsEnumerable());
+
 }

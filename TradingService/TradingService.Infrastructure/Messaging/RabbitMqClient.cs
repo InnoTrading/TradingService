@@ -1,103 +1,211 @@
-﻿using System.Collections.Concurrent;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Text;
-using Microsoft.EntityFrameworkCore.Metadata;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TradingService.Domain.Interfaces;
 
-namespace TradingService.Infrastructure.Messaging;
-
-public class RabbitMqClient : ITradingServiceClient, IAsyncDisposable, IDisposable
+namespace TradingService.Infrastructure.Messaging
 {
-    private const string QueueName = "user_free_balance_rpc_queue";
+    /// <summary>
+    /// DTO żądania kupna/sprzedaży z informacją która operacja:
+    /// Operation = 0 → BUY (sprawdź free balance)
+    /// Operation = 1 → SELL (sprawdź stock count)
+    /// </summary>
+    public record OrderRequest(
+        string UserId,
+        Guid StockId,
+        int Quantity,
+        decimal PricePerShare,
+        int Operation
+    );
 
-    private readonly IConnectionFactory _connectionFactory = new ConnectionFactory { HostName = "localhost" };
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _callbackMapper = new();
-    private IConnection? _connection;
-    private IChannel? _channel;
-    private string? _replyQueueName;
-
-    public async Task StartAsync()
+    public class RabbitMqClient : ITradingServiceClient, IAsyncDisposable, IDisposable
     {
-        _connection = await _connectionFactory.CreateConnectionAsync();
-        _channel = await _connection.CreateChannelAsync();
+        private const string FreeBalanceQueue = "user_free_balance_rpc_queue";
+        private const string StockCountQueue = "user_stock_count_rpc_queue";
+        private const string OrdersExchange = "";  // default exchange
+        private const string OrdersRoutingKey = "order_executed_queue";
 
-        QueueDeclareOk queueDeclareOk = await _channel.QueueDeclareAsync();
-        _replyQueueName = queueDeclareOk.QueueName;
-        var consumer = new AsyncEventingBasicConsumer(_channel);
+        private readonly IConnectionFactory _factory
+            = new ConnectionFactory { HostName = "localhost" };
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<string>>
+            _callbackMapper = new();
 
-        consumer.ReceivedAsync += (model, ea) =>
+        private IConnection? _connection;
+        private IChannel? _channel;
+        private string? _replyQueueName;
+
+        /// <summary>
+        /// Must be called once before any RPC or publish.
+        /// </summary>
+        public async Task StartAsync()
         {
-            string? correlationId = ea.BasicProperties.CorrelationId;
+            _connection = await _factory.CreateConnectionAsync();
+            _channel = await _connection.CreateChannelAsync();
 
-            if (false == string.IsNullOrEmpty(correlationId))
+            var declareOk = await _channel.QueueDeclareAsync();
+            _replyQueueName = declareOk.QueueName;
+
+            var consumer = new AsyncEventingBasicConsumer(_channel);
+            consumer.ReceivedAsync += (model, ea) =>
             {
-                if (_callbackMapper.TryRemove(correlationId, out var tcs))
+                var corrId = ea.BasicProperties.CorrelationId;
+                if (!string.IsNullOrEmpty(corrId)
+                    && _callbackMapper.TryRemove(corrId, out var tcs))
                 {
-                    var body = ea.Body.ToArray();
-                    var response = Encoding.UTF8.GetString(body);
-                    tcs.TrySetResult(response);
+                    var resp = Encoding.UTF8.GetString(ea.Body.ToArray());
+                    tcs.TrySetResult(resp);
                 }
+                return Task.CompletedTask;
+            };
+
+            await _channel.BasicConsumeAsync(
+                queue: _replyQueueName,
+                autoAck: true,
+                consumer: consumer
+            );
+        }
+
+        /// <summary>
+        /// RPC-call: Balance – ReservedBalance
+        /// </summary>
+        public async Task<decimal> RequestUserFreeBalanceToOrders(
+            string userId,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureChannel();
+
+            var corrId = Guid.NewGuid().ToString();
+            var props = new BasicProperties
+            {
+                CorrelationId = corrId,
+                ReplyTo = _replyQueueName
+            };
+
+            var tcs = new TaskCompletionSource<string>();
+            _callbackMapper[corrId] = tcs;
+
+            var body = Encoding.UTF8.GetBytes(userId);
+            await _channel!.BasicPublishAsync(
+                exchange: "",
+                routingKey: FreeBalanceQueue,
+                mandatory: false,
+                basicProperties: props,
+                body: body,
+                cancellationToken: cancellationToken);
+
+            var resp = await tcs.Task;
+            return decimal.Parse(resp, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Publikuje OrderExecuted.  
+        /// Dla Operation=0 sprawdza free balance,  
+        /// dla Operation=1 sprawdza stock count.  
+        /// </summary>
+        public async Task PublishOrderExecutedAsync(
+            object payload,
+            CancellationToken ct = default)
+        {
+            EnsureChannel();
+
+            if (payload is not OrderRequest req)
+                throw new ArgumentException(
+                    "Payload must be OrderRequest", nameof(payload));
+
+            // WALIDACJA
+            if (req.Operation == 0)
+            {
+                // BUY → sprawdź free balance
+                var free = await RequestUserFreeBalanceToOrders(req.UserId, ct);
+                var cost = req.Quantity * req.PricePerShare;
+                if (free < cost)
+                    throw new InvalidOperationException(
+                        $"Insufficient funds: have {free}, need {cost}");
+            }
+            else if (req.Operation == 1)
+            {
+                // SELL → sprawdź stock count
+                var have = await RequestUserStockCountAsync(req.UserId, req.StockId, ct);
+                if (have < req.Quantity)
+                    throw new InvalidOperationException(
+                        $"Insufficient shares: have {have}, need {req.Quantity}");
+            }
+            else
+            {
+                throw new ArgumentException(
+                    $"Unknown operation value: {req.Operation}", nameof(req.Operation));
             }
 
-            return Task.CompletedTask;
-        };
-        await _channel.BasicConsumeAsync(_replyQueueName, true, consumer);
-    }
-    public async Task<decimal> RequestUserFreeBalanceToOrders(string userId, CancellationToken cancellationToken = default)
-    {
+            // publikacja eventu do PortfolioService
+            var json = JsonSerializer.Serialize(req);
+            var data = Encoding.UTF8.GetBytes(json);
 
-        if (_channel == null || string.IsNullOrEmpty(_replyQueueName))
-            throw new InvalidOperationException("RabbitMQ channel has not been initialized. Call StartAsync() first.");
-        
-        var correlationId = Guid.NewGuid().ToString();
+            var props = new BasicProperties
+            {
+                DeliveryMode = DeliveryModes.Persistent
+            };
 
-        var props = new BasicProperties
-        {
-            CorrelationId = correlationId,
-            ReplyTo = _replyQueueName
-        };
-
-        var tcs = new TaskCompletionSource<string>();
-        _callbackMapper[correlationId] = tcs;
-        
-        var messageBytes = Encoding.UTF8.GetBytes(userId);
-
-        await _channel.BasicPublishAsync<BasicProperties>(
-            exchange: "",
-            routingKey: QueueName,
-            mandatory: false,
-            basicProperties: props,
-            body: messageBytes,
-            cancellationToken: cancellationToken);
-
-        var response = await tcs.Task;
-        if (decimal.TryParse(response, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out decimal balance))
-        {
-            Console.WriteLine($"{response}");
-            return balance;
-        }
-        else
-        {
-            throw new Exception($"Failed to parse response '{response}' on decimal type.");
-        }
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_channel is not null)
-        {
-            await _channel.CloseAsync();
+            await _channel!.BasicPublishAsync(
+                exchange: OrdersExchange,
+                routingKey: OrdersRoutingKey,
+                mandatory: false,
+                basicProperties: props,
+                body: data,
+                cancellationToken: ct);
         }
 
-        if (_connection is not null)
+        /// <summary>
+        /// RPC-call: ile akcji danego stockId ma user
+        /// (metoda prywatna, nie część interfejsu)
+        /// </summary>
+        private async Task<int> RequestUserStockCountAsync(
+            string userId,
+            Guid stockId,
+            CancellationToken ct)
         {
-            await _connection.CloseAsync();
-        }
-    }
+            EnsureChannel();
 
-    public void Dispose()
-    {
-        DisposeAsync().GetAwaiter().GetResult();
+            var corrId = Guid.NewGuid().ToString();
+            var props = new BasicProperties
+            {
+                CorrelationId = corrId,
+                ReplyTo = _replyQueueName
+            };
+
+            var tcs = new TaskCompletionSource<string>();
+            _callbackMapper[corrId] = tcs;
+
+            var reqDto = new { UserId = userId, StockId = stockId };
+            var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(reqDto));
+
+            await _channel!.BasicPublishAsync(
+                exchange: "",
+                routingKey: StockCountQueue,
+                mandatory: false,
+                basicProperties: props,
+                body: body,
+                cancellationToken: ct);
+
+            var resp = await tcs.Task;
+            return int.Parse(resp);
+        }
+
+        private void EnsureChannel()
+        {
+            if (_channel == null || string.IsNullOrEmpty(_replyQueueName))
+                throw new InvalidOperationException("Call StartAsync() first.");
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_channel != null) await _channel.CloseAsync();
+            if (_connection != null) await _connection.CloseAsync();
+        }
+        public void Dispose() => DisposeAsync().GetAwaiter().GetResult();
     }
 }

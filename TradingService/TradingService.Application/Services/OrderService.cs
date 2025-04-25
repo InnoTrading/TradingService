@@ -31,7 +31,7 @@ public class OrderService(IOrdersManager ordersManager, IMapper mapper) : IOrder
 
     public async Task<IEnumerable<OrderDto>> GetUserOrders(string userId)
     {
-        var result = await ordersManager.GetUserOrders(userId);
+        var result = await ordersManager.GetUserOrdersAsync(userId);
 
         return mapper.Map<IEnumerable<OrderDto>>(result);
     }
