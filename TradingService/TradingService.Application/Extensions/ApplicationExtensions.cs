@@ -2,6 +2,7 @@
 using TradingService.Application.Interfaces;
 using TradingService.Application.Mapping;
 using TradingService.Application.Services;
+using TradingService.Domain.Interfaces;
 
 namespace TradingService.Application.Extensions;
 
@@ -10,6 +11,7 @@ public static class ApplicationExtensions
     public static IServiceCollection AddApplicationServices(this IServiceCollection services)
     {
         services.AddScoped<IOrderService, OrderService>();
+        services.AddHostedService<OrderExecutionService>();
         services.AddAutoMapper(typeof(OrderMappingProfile));
         services.AddAutoMapper(typeof(PlaceOrderMappingProfile));
         return services;

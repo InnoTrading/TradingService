@@ -18,8 +18,10 @@ public static class InfrastructureExtensions
             options.UseNpgsql(connectionString));
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
-        services.AddScoped<ITradingServiceClient, RabbitMqClient>();
-        
+        services.AddSingleton<ITradingServiceClient, RabbitMqClient>();
+        services.AddHostedService<RabbitMqStarter>();
+
+
         return services;
     }
 }

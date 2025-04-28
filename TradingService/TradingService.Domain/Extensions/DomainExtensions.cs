@@ -2,15 +2,20 @@
 using TradingService.Domain.Interfaces;
 using TradingService.Domain.Services;
 
-namespace TradingService.Domain.Extensions;
-
-public static class DomainExtensions
+namespace TradingService.Domain.Extensions
 {
-    public static IServiceCollection AddDomainServices(this IServiceCollection services)
+    public static class DomainExtensions
     {
-        services.AddScoped<IOrdersManager,OrdersManager>();
-        services.AddSingleton<IActiveOrdersStore, ActiveOrdersStore>();
-        services.AddHostedService<OrdersInitializationService>();
-        return services;
+        public static IServiceCollection AddDomainServices(this IServiceCollection services)
+        {
+            services.AddScoped<IOrdersManager, OrdersManager>();
+            services.AddSingleton<IActiveOrdersStore, ActiveOrdersStore>();
+
+            services.AddHostedService<OrdersInitializationService>();
+
+            services.AddHttpClient<IMarketDataClient, MarketDataClient>();
+
+            return services;
+        }
     }
 }

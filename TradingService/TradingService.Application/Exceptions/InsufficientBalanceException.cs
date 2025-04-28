@@ -1,4 +1,4 @@
-﻿namespace TradingService.Domain.Exceptions;
+﻿namespace TradingService.Application.Exceptions;
 
 public class InsufficientBalanceException(decimal requiredBalance, decimal freeBalanceForOrders)
     : Exception($"Not enough cash. Required: {requiredBalance}. Available: {freeBalanceForOrders}")
