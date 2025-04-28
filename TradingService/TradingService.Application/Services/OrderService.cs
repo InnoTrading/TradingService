@@ -23,11 +23,17 @@ public class OrderService(
         switch (order.Operation)
         {
             case OperationType.Buy:
-                var freeBalance = await _tradingServiceClient.RequestUserFreeBalanceToOrders(order.UserId);
+                var availableBalance = await _tradingServiceClient.RequestUserAvaibleBalanceToOrders(order.UserId);
                 var cost = order.PriceLimit * order.Amount;
-                if (freeBalance < cost)
+                if (availableBalance < cost)
                 {
-                    throw new InsufficientBalanceException(cost, freeBalance);
+                    throw new InsufficientBalanceException(cost, availableBalance);
+                }
+
+                var reserveSuccess = await _tradingServiceClient.ReserveBalance(order.UserId, cost);
+                if (!reserveSuccess)
+                {
+                    throw new InvalidOperationException("Failed to reserve balance for the order.");
                 }
                 break;
 
@@ -50,9 +56,27 @@ public class OrderService(
 
     public async Task<bool> CancelAnOrder(Guid orderId)
     {
-        var result = await _ordersManager.CancelAnOrder(orderId);
+        var order = await _ordersManager.GetOrder(orderId);
 
-        return result;
+        if (order == null)
+            return false;
+
+        if (!order.IsActive)
+            return false;
+
+        var cancelResult = await _ordersManager.CancelAnOrder(orderId);
+
+        if (cancelResult && order.Operation == OperationType.Buy)
+        {
+            var cost = order.PriceLimit * order.Amount;
+            var releaseSuccess = await _tradingServiceClient.ReleaseReservedBalance(order.UserId, cost);
+            if (!releaseSuccess)
+            {
+                throw new InvalidOperationException("Failed to release reserved balance after order cancellation.");
+            }
+        }
+
+        return cancelResult;
     }
 
     public async Task<OrderDto> GetOrder(Guid orderId)

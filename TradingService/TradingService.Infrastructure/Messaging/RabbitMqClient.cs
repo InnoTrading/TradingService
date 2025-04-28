@@ -1,39 +1,39 @@
 ﻿using System.Collections.Concurrent;
-using System.Text;
-using System.Text.Json;
+using TradingService.Application.Contracts.Messaging;
+using TradingService.Application.Interfaces;
+using TradingService.Domain.Entities;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
-using TradingService.Application.Contracts.Messaging;
-using TradingService.Domain.Entities;
+using System.Text;
 using TradingService.Domain.Interfaces;
 
 namespace TradingService.Infrastructure.Messaging
 {
     public class RabbitMqClient : ITradingServiceClient, IAsyncDisposable, IDisposable
     {
-        private const string FreeBalanceQueue = "user_free_balance_rpc_queue";
+        private const string AvailableBalanceQueue = "user_available_balance_rpc_queue";
         private const string StockCountQueue = "user_stock_count_rpc_queue";
-        private const string OrdersExchange = "";  // default exchange
+        private const string OrdersExchange = "";
         private const string OrdersRoutingKey = "order_executed_queue";
 
-        private readonly IConnectionFactory _factory
-            = new ConnectionFactory { HostName = "localhost" };
-        private readonly ConcurrentDictionary<string, TaskCompletionSource<string>>
-            _callbackMapper = new();
+        private readonly ConnectionManager _connectionManager;
+        private readonly RpcClientHelper _rpcClientHelper;
+        private readonly PublishHelper _publishHelper;
+        private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _callbackMapper = new();
 
-        private IConnection? _connection;
-        private IChannel? _channel;
-        private string? _replyQueueName;
+        public RabbitMqClient()
+        {
+            var factory = new ConnectionFactory { HostName = "localhost" };
+            _connectionManager = new ConnectionManager(factory);
+            _rpcClientHelper = new RpcClientHelper(_connectionManager, _callbackMapper);
+            _publishHelper = new PublishHelper(_connectionManager);
+        }
 
         public async Task StartAsync()
         {
-            _connection = await _factory.CreateConnectionAsync();
-            _channel = await _connection.CreateChannelAsync();
+            await _connectionManager.StartAsync();
 
-            var declareOk = await _channel.QueueDeclareAsync();
-            _replyQueueName = declareOk.QueueName;
-
-            var consumer = new AsyncEventingBasicConsumer(_channel);
+            var consumer = new AsyncEventingBasicConsumer(_connectionManager.Channel);
             consumer.ReceivedAsync += (model, ea) =>
             {
                 var corrId = ea.BasicProperties.CorrelationId;
@@ -46,110 +46,58 @@ namespace TradingService.Infrastructure.Messaging
                 return Task.CompletedTask;
             };
 
-            await _channel.BasicConsumeAsync(
-                queue: _replyQueueName,
+            await _connectionManager.Channel.BasicConsumeAsync(
+                queue: _connectionManager.ReplyQueueName,
                 autoAck: true,
                 consumer: consumer
             );
         }
 
-        public async Task<decimal> RequestUserFreeBalanceToOrders(
-            string userId,
-            CancellationToken cancellationToken = default)
+        public async Task<decimal> RequestUserAvaibleBalanceToOrders(string userId, CancellationToken cancellationToken = default)
         {
-            EnsureChannel();
+            var response = await _rpcClientHelper.CallRpcRawAsync(userId, AvailableBalanceQueue, cancellationToken);
 
-            var corrId = Guid.NewGuid().ToString();
-            var props = new BasicProperties
-            {
-                CorrelationId = corrId,
-                ReplyTo = _replyQueueName
-            };
+            if (string.IsNullOrWhiteSpace(response))
+                throw new InvalidOperationException("Received empty response from PortfolioService when requesting available balance.");
 
-            var tcs = new TaskCompletionSource<string>();
-            _callbackMapper[corrId] = tcs;
-
-            var body = Encoding.UTF8.GetBytes(userId);
-            await _channel!.BasicPublishAsync(
-                exchange: "",
-                routingKey: FreeBalanceQueue,
-                mandatory: false,
-                basicProperties: props,
-                body: body,
-                cancellationToken: cancellationToken);
-
-            var resp = await tcs.Task;
-            return decimal.Parse(resp, System.Globalization.CultureInfo.InvariantCulture);
-        }
-
-        public async Task PublishOrderExecutedAsync(
-            OrderRequest req,
-            CancellationToken ct = default)
-        {
-            EnsureChannel();
-
-            var json = JsonSerializer.Serialize(req);
-            var data = Encoding.UTF8.GetBytes(json);
-
-            var props = new BasicProperties
-            {
-                DeliveryMode = DeliveryModes.Persistent
-            };
-
-            await _channel!.BasicPublishAsync(
-                exchange: OrdersExchange,
-                routingKey: OrdersRoutingKey,
-                mandatory: false,
-                basicProperties: props,
-                body: data,
-                cancellationToken: ct);
+            return decimal.Parse(response, System.Globalization.CultureInfo.InvariantCulture);
         }
 
 
-        public async Task<int> RequestUserSpecificStocksAmountForSale(
-            string userId,
-            string stockTicker,
-            CancellationToken ct)
+        public async Task<int> RequestUserSpecificStocksAmountForSale(string userId, string stockTicker, CancellationToken ct = default)
         {
-            EnsureChannel();
-
-            var corrId = Guid.NewGuid().ToString();
-            var props = new BasicProperties
-            {
-                CorrelationId = corrId,
-                ReplyTo = _replyQueueName
-            };
-
-            var tcs = new TaskCompletionSource<string>();
-            _callbackMapper[corrId] = tcs;
-
             var reqDto = new { UserId = userId, StockTicker = stockTicker };
-            var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(reqDto));
-
-            await _channel!.BasicPublishAsync(
-                exchange: "",
-                routingKey: StockCountQueue,
-                mandatory: false,
-                basicProperties: props,
-                body: body,
-                cancellationToken: ct);
-
-            var resp = await tcs.Task;
-            return int.Parse(resp);
+            var response = await _rpcClientHelper.CallRpcAsync(reqDto, StockCountQueue, ct);
+            return int.Parse(response);
         }
 
-        private void EnsureChannel()
+        public async Task<bool> ReserveBalance(string userId, decimal amount, CancellationToken ct = default)
         {
-            if (_channel == null || string.IsNullOrEmpty(_replyQueueName))
-                throw new InvalidOperationException("Call StartAsync() first.");
+            var payload = new { UserId = userId, Amount = amount };
+            var response = await _rpcClientHelper.CallRpcAsync(payload, "user_reserve_balance_rpc_queue", ct);
+            return bool.Parse(response);
+        }
+
+        public async Task<bool> ReleaseReservedBalance(string userId, decimal amount, CancellationToken ct = default)
+        {
+            var payload = new { UserId = userId, Amount = amount };
+            var response = await _rpcClientHelper.CallRpcAsync(payload, "user_release_reserved_balance_rpc_queue", ct);
+            return bool.Parse(response);
+        }
+
+        public async Task PublishOrderExecutedAsync(OrderRequest req, CancellationToken ct = default)
+        {
+            await _publishHelper.PublishMessageAsync(req, OrdersExchange, OrdersRoutingKey, ct);
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (_channel != null) await _channel.CloseAsync();
-            if (_connection != null) await _connection.CloseAsync();
+            await _connectionManager.DisposeAsync();
         }
-        public void Dispose() => DisposeAsync().GetAwaiter().GetResult();
 
+        public void Dispose()
+        {
+            DisposeAsync().GetAwaiter().GetResult();
+        }
     }
 }
