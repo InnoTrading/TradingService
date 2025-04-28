@@ -19,6 +19,8 @@ public static class InfrastructureExtensions
 
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddSingleton<ITradingServiceClient, RabbitMqClient>();
+        services.AddHostedService<RabbitMqStarter>();
+
 
         return services;
     }

@@ -1,6 +1,4 @@
-﻿using System;
-using System.Threading;
-using System.Threading.Tasks;
+﻿using TradingService.Application.Contracts.Messaging;
 
 namespace TradingService.Domain.Interfaces
 {
@@ -8,7 +6,7 @@ namespace TradingService.Domain.Interfaces
     {
         Task StartAsync();
         Task<decimal> RequestUserFreeBalanceToOrders(string userId, CancellationToken cancellationToken = default);
-        Task PublishOrderExecutedAsync(object payload, CancellationToken cancellationToken = default);
         Task<int> RequestUserSpecificStocksAmountForSale(string userId, string stockTicker, CancellationToken cancellationToken = default);
+        Task PublishOrderExecutedAsync(OrderRequest payload, CancellationToken cancellationToken = default);
     }
 }

@@ -4,22 +4,19 @@ using TradingService.Domain.Entities;
 using TradingService.Domain.Interfaces;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
-using TradingService.Domain.Exceptions;
 using System.Net.Sockets;
-using TradingService.Domain.Entitites;
 
 namespace TradingService.Domain.Services;
 
 public class OrdersManager(
     IUnitOfWork unitOfWork,
     ILogger<OrdersManager> logger,
-    IActiveOrdersStore activeOrdersStore,
-    ITradingServiceClient tradingServiceClient) : IOrdersManager
+    IActiveOrdersStore activeOrdersStore
+    ) : IOrdersManager
 {
     private readonly IUnitOfWork _unitOfWork = unitOfWork;
     private readonly ILogger<OrdersManager> _logger = logger;
     private readonly IActiveOrdersStore _activeOrdersStore = activeOrdersStore;
-    private readonly ITradingServiceClient _tradingServiceClient = tradingServiceClient;
 
     public async Task InitializeOrdersAsync()
     {
@@ -35,27 +32,6 @@ public class OrdersManager(
 
     public async Task<bool> PlaceAnOrder(OrderEntity order)
     {
-        await _tradingServiceClient.StartAsync();
-  
-        switch(order.Operation)
-        {
-            case OperationType.Buy:
-                decimal freeBalance = await _tradingServiceClient.RequestUserFreeBalanceToOrders(order.UserId);
-
-                if (freeBalance < order.PriceLimit * order.Amount)
-                    throw new InsufficientBalanceException(order.PriceLimit * order.Amount, freeBalance);
-                break;
-            
-            case OperationType.Sell:
-                int userStocksAmount = await _tradingServiceClient.RequestUserSpecificStocksAmountForSale(order.UserId, order.StockTicker);
-                if(userStocksAmount < order.Amount)
-                    throw new InsufficientAmountOfStocksInPortfolio(order.Amount, userStocksAmount);
-                break;
-            
-            default:
-                throw new InvalidOperationException("Not valid type od operation");
-        }
-
         var result = await _unitOfWork.Orders.AddAsync(order);
         if (result)
         {
@@ -66,6 +42,7 @@ public class OrdersManager(
         await _unitOfWork.CommitAsync();
         return result;
     }
+
 
     public async Task<bool> CancelAnOrder(Guid id)
     {

@@ -1,13 +1,11 @@
-﻿using System;
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
+using TradingService.Application.Contracts.Messaging;
+using TradingService.Domain.Entities;
 using TradingService.Domain.Interfaces;
-using TradingService.Infrastructure.Messaging.Dtos;
 
 namespace TradingService.Infrastructure.Messaging
 {
@@ -85,35 +83,10 @@ namespace TradingService.Infrastructure.Messaging
         }
 
         public async Task PublishOrderExecutedAsync(
-            object payload,
+            OrderRequest req,
             CancellationToken ct = default)
         {
             EnsureChannel();
-
-            if (payload is not OrderRequest req)
-                throw new ArgumentException(
-                    "Payload must be OrderRequest", nameof(payload));
-
-            if (req.Operation == 0)
-            {
-                var free = await RequestUserFreeBalanceToOrders(req.UserId, ct);
-                var cost = req.Quantity * req.PricePerShare;
-                if (free < cost)
-                    throw new InvalidOperationException(
-                        $"Insufficient funds: have {free}, need {cost}");
-            }
-            else if (req.Operation == 1)
-            {
-                var have = await RequestUserSpecificStocksAmountForSale(req.UserId, req.StockTicker, ct);
-                if (have < req.Quantity)
-                    throw new InvalidOperationException(
-                        $"Insufficient shares: have {have}, need {req.Quantity}");
-            }
-            else
-            {
-                throw new ArgumentException(
-                    $"Unknown operation value: {req.Operation}", nameof(req.Operation));
-            }
 
             var json = JsonSerializer.Serialize(req);
             var data = Encoding.UTF8.GetBytes(json);
@@ -131,6 +104,7 @@ namespace TradingService.Infrastructure.Messaging
                 body: data,
                 cancellationToken: ct);
         }
+
 
         public async Task<int> RequestUserSpecificStocksAmountForSale(
             string userId,

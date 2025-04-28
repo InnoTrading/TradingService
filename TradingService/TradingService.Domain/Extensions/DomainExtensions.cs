@@ -12,7 +12,6 @@ namespace TradingService.Domain.Extensions
             services.AddSingleton<IActiveOrdersStore, ActiveOrdersStore>();
 
             services.AddHostedService<OrdersInitializationService>();
-            services.AddHostedService<OrderExecutionService>();
 
             services.AddHttpClient<IMarketDataClient, MarketDataClient>();
 

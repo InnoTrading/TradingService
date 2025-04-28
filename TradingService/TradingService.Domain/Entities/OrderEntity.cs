@@ -1,6 +1,4 @@
-﻿using TradingService.Domain.Entitites;
-
-namespace TradingService.Domain.Entities;
+﻿namespace TradingService.Domain.Entities;
 
 public class OrderEntity : BaseEntity
 {
