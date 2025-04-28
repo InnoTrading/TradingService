@@ -1,9 +1,14 @@
-﻿namespace TradingService.Domain.Interfaces;
+﻿using System;
+using System.Threading;
+using System.Threading.Tasks;
 
-public interface ITradingServiceClient
+namespace TradingService.Domain.Interfaces
 {
-    Task<decimal> RequestUserFreeBalanceToOrders(string userId, CancellationToken cancellationToken = default);
-    Task StartAsync();
-    Task PublishOrderExecutedAsync(object payload, CancellationToken ct = default);
-
+    public interface ITradingServiceClient: IAsyncDisposable, IDisposable
+    {
+        Task StartAsync();
+        Task<decimal> RequestUserFreeBalanceToOrders(string userId, CancellationToken cancellationToken = default);
+        Task PublishOrderExecutedAsync(object payload, CancellationToken cancellationToken = default);
+        Task<int> RequestUserSpecificStocksAmountForSale(string userId, string stockTicker, CancellationToken cancellationToken = default);
+    }
 }

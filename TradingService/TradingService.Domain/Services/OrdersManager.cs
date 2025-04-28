@@ -6,6 +6,7 @@ using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
 using TradingService.Domain.Exceptions;
 using System.Net.Sockets;
+using TradingService.Domain.Entitites;
 
 namespace TradingService.Domain.Services;
 
@@ -35,10 +36,25 @@ public class OrdersManager(
     public async Task<bool> PlaceAnOrder(OrderEntity order)
     {
         await _tradingServiceClient.StartAsync();
-        decimal freeBalance = await _tradingServiceClient.RequestUserFreeBalanceToOrders(order.UserId);
+  
+        switch(order.Operation)
+        {
+            case OperationType.Buy:
+                decimal freeBalance = await _tradingServiceClient.RequestUserFreeBalanceToOrders(order.UserId);
 
-        if (freeBalance < order.PriceLimit * order.Amount)
-            throw new InsufficientBalanceException(order.PriceLimit * order.Amount, freeBalance);
+                if (freeBalance < order.PriceLimit * order.Amount)
+                    throw new InsufficientBalanceException(order.PriceLimit * order.Amount, freeBalance);
+                break;
+            
+            case OperationType.Sell:
+                int userStocksAmount = await _tradingServiceClient.RequestUserSpecificStocksAmountForSale(order.UserId, order.StockTicker);
+                if(userStocksAmount < order.Amount)
+                    throw new InsufficientAmountOfStocksInPortfolio(order.Amount, userStocksAmount);
+                break;
+            
+            default:
+                throw new InvalidOperationException("Not valid type od operation");
+        }
 
         var result = await _unitOfWork.Orders.AddAsync(order);
         if (result)

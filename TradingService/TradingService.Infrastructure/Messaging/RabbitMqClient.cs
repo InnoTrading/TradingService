@@ -7,22 +7,10 @@ using System.Threading.Tasks;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using TradingService.Domain.Interfaces;
+using TradingService.Infrastructure.Messaging.Dtos;
 
 namespace TradingService.Infrastructure.Messaging
 {
-    /// <summary>
-    /// DTO żądania kupna/sprzedaży z informacją która operacja:
-    /// Operation = 0 → BUY (sprawdź free balance)
-    /// Operation = 1 → SELL (sprawdź stock count)
-    /// </summary>
-    public record OrderRequest(
-        string UserId,
-        Guid StockId,
-        int Quantity,
-        decimal PricePerShare,
-        int Operation
-    );
-
     public class RabbitMqClient : ITradingServiceClient, IAsyncDisposable, IDisposable
     {
         private const string FreeBalanceQueue = "user_free_balance_rpc_queue";
@@ -39,9 +27,6 @@ namespace TradingService.Infrastructure.Messaging
         private IChannel? _channel;
         private string? _replyQueueName;
 
-        /// <summary>
-        /// Must be called once before any RPC or publish.
-        /// </summary>
         public async Task StartAsync()
         {
             _connection = await _factory.CreateConnectionAsync();
@@ -70,9 +55,6 @@ namespace TradingService.Infrastructure.Messaging
             );
         }
 
-        /// <summary>
-        /// RPC-call: Balance – ReservedBalance
-        /// </summary>
         public async Task<decimal> RequestUserFreeBalanceToOrders(
             string userId,
             CancellationToken cancellationToken = default)
@@ -102,11 +84,6 @@ namespace TradingService.Infrastructure.Messaging
             return decimal.Parse(resp, System.Globalization.CultureInfo.InvariantCulture);
         }
 
-        /// <summary>
-        /// Publikuje OrderExecuted.  
-        /// Dla Operation=0 sprawdza free balance,  
-        /// dla Operation=1 sprawdza stock count.  
-        /// </summary>
         public async Task PublishOrderExecutedAsync(
             object payload,
             CancellationToken ct = default)
@@ -117,10 +94,8 @@ namespace TradingService.Infrastructure.Messaging
                 throw new ArgumentException(
                     "Payload must be OrderRequest", nameof(payload));
 
-            // WALIDACJA
             if (req.Operation == 0)
             {
-                // BUY → sprawdź free balance
                 var free = await RequestUserFreeBalanceToOrders(req.UserId, ct);
                 var cost = req.Quantity * req.PricePerShare;
                 if (free < cost)
@@ -129,8 +104,7 @@ namespace TradingService.Infrastructure.Messaging
             }
             else if (req.Operation == 1)
             {
-                // SELL → sprawdź stock count
-                var have = await RequestUserStockCountAsync(req.UserId, req.StockId, ct);
+                var have = await RequestUserSpecificStocksAmountForSale(req.UserId, req.StockTicker, ct);
                 if (have < req.Quantity)
                     throw new InvalidOperationException(
                         $"Insufficient shares: have {have}, need {req.Quantity}");
@@ -141,7 +115,6 @@ namespace TradingService.Infrastructure.Messaging
                     $"Unknown operation value: {req.Operation}", nameof(req.Operation));
             }
 
-            // publikacja eventu do PortfolioService
             var json = JsonSerializer.Serialize(req);
             var data = Encoding.UTF8.GetBytes(json);
 
@@ -159,13 +132,9 @@ namespace TradingService.Infrastructure.Messaging
                 cancellationToken: ct);
         }
 
-        /// <summary>
-        /// RPC-call: ile akcji danego stockId ma user
-        /// (metoda prywatna, nie część interfejsu)
-        /// </summary>
-        private async Task<int> RequestUserStockCountAsync(
+        public async Task<int> RequestUserSpecificStocksAmountForSale(
             string userId,
-            Guid stockId,
+            string stockTicker,
             CancellationToken ct)
         {
             EnsureChannel();
@@ -180,7 +149,7 @@ namespace TradingService.Infrastructure.Messaging
             var tcs = new TaskCompletionSource<string>();
             _callbackMapper[corrId] = tcs;
 
-            var reqDto = new { UserId = userId, StockId = stockId };
+            var reqDto = new { UserId = userId, StockTicker = stockTicker };
             var body = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(reqDto));
 
             await _channel!.BasicPublishAsync(
@@ -207,5 +176,6 @@ namespace TradingService.Infrastructure.Messaging
             if (_connection != null) await _connection.CloseAsync();
         }
         public void Dispose() => DisposeAsync().GetAwaiter().GetResult();
+
     }
 }
