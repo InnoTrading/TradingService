@@ -65,8 +65,6 @@ public class OrderExecutionService(
                     {
                         await ValidateOrderFundsAsync(order, currentPrice, scope.ServiceProvider, stoppingToken);
 
-                        await ordersManager.ExecuteOrder(order);
-
                         var orderRequest = new OrderRequest(
                             order.Id,
                             order.UserId,
@@ -74,9 +72,12 @@ public class OrderExecutionService(
                             order.Operation,
                             currentPrice,
                             order.Amount,
-                            DateTime.UtcNow
+                            DateTime.UtcNow,
+                            order.PriceLimit
                         );
 
+
+                        await ordersManager.ExecuteOrder(order);
                         await _tradingServiceClient.PublishOrderExecutedAsync(orderRequest, stoppingToken);
 
                         _logger.LogInformation("Executed order {OrderId} at {Price}", order.Id, currentPrice);
@@ -110,6 +111,10 @@ public class OrderExecutionService(
             {
                 throw new InvalidOperationException($"Insufficient stock: have {stockAmount}, need {order.Amount} of {order.StockTicker}.");
             }
+        }
+        else if (order.Operation == OperationType.Buy)
+        {
+           // To think about it
         }
         else
         {

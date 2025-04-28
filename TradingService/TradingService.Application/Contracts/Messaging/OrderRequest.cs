@@ -9,7 +9,8 @@ namespace TradingService.Application.Contracts.Messaging
         OperationType operation,
         decimal executedPrice,
         int amount,
-        DateTime executedAt
+        DateTime executedAt,
+        decimal PriceLimit
     );
 
 }
