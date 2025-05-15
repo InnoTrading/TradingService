@@ -12,6 +12,7 @@ public static class ApplicationExtensions
     {
         services.AddScoped<IOrderService, OrderService>();
         services.AddHostedService<OrderExecutionService>();
+      
         services.AddAutoMapper(typeof(OrderMappingProfile));
         services.AddAutoMapper(typeof(PlaceOrderMappingProfile));
         return services;
