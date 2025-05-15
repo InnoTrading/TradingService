@@ -1,4 +1,4 @@
-﻿using TradingService.Domain.Entitites;
+﻿using TradingService.Domain.Entities;
 
 namespace TradingService.Application.DTOs;
 

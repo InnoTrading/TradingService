@@ -2,5 +2,5 @@
 
 public interface IMarketDataClient
 {
-    Task<decimal> GetCurrentStockPriceAsync(string stockTicker);
+    Task<decimal> GetCurrentStockPriceAsync(string stockTicker, CancellationToken token);
 }

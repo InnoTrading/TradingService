@@ -4,7 +4,6 @@ using TradingService.Domain.Entities;
 using TradingService.Domain.Interfaces;
 using Microsoft.Extensions.Logging;
 using RabbitMQ.Client;
-using TradingService.Domain.Exceptions;
 using System.Net.Sockets;
 
 namespace TradingService.Domain.Services;
@@ -12,13 +11,12 @@ namespace TradingService.Domain.Services;
 public class OrdersManager(
     IUnitOfWork unitOfWork,
     ILogger<OrdersManager> logger,
-    IActiveOrdersStore activeOrdersStore,
-    ITradingServiceClient tradingServiceClient) : IOrdersManager
+    IActiveOrdersStore activeOrdersStore
+    ) : IOrdersManager
 {
     private readonly IUnitOfWork _unitOfWork = unitOfWork;
     private readonly ILogger<OrdersManager> _logger = logger;
     private readonly IActiveOrdersStore _activeOrdersStore = activeOrdersStore;
-    private readonly ITradingServiceClient _tradingServiceClient = tradingServiceClient;
 
     public async Task InitializeOrdersAsync()
     {
@@ -34,12 +32,6 @@ public class OrdersManager(
 
     public async Task<bool> PlaceAnOrder(OrderEntity order)
     {
-        await _tradingServiceClient.StartAsync();
-        decimal freeBalance = await _tradingServiceClient.RequestUserFreeBalanceToOrders(order.UserId);
-
-        if (freeBalance < order.PriceLimit * order.Amount)
-            throw new InsufficientBalanceException(order.PriceLimit * order.Amount, freeBalance);
-
         var result = await _unitOfWork.Orders.AddAsync(order);
         if (result)
         {
@@ -51,19 +43,23 @@ public class OrdersManager(
         return result;
     }
 
+
     public async Task<bool> CancelAnOrder(Guid id)
     {
-        if (!_activeOrdersStore.ActiveOrders.TryRemove(id, out var order))
-        {
-            order = await _unitOfWork.Orders.GetByIdAsync(id);
-        }
+        if (!_activeOrdersStore.ActiveOrders.ContainsKey(id))
+            return false;
+
+        var order = await _unitOfWork.Orders.GetByIdAsync(id);        
 
         if (order == null || order.IsCompleted)
             return false;
 
         order.IsActive = false;
         _logger.LogInformation("Order {OrderId} cancelled, removed from active orders.", id);
-        await _unitOfWork.CommitAsync();
+        if(_activeOrdersStore.ActiveOrders.TryRemove(id, out var deleted))
+        {
+            await _unitOfWork.CommitAsync();
+        }
         return true;
     }
 
@@ -74,9 +70,11 @@ public class OrdersManager(
         return await _unitOfWork.Orders.GetByIdAsync(id);
     }
 
-    public async Task<IEnumerable<OrderEntity>> GetUserOrders(string userId)
+    public Task<IEnumerable<OrderEntity>> GetUserOrdersAsync(string userId)
     {
-        return _activeOrdersStore.ActiveOrders.Values.Where(o => o.UserId == userId);
+        var result = _activeOrdersStore.ActiveOrders.Values
+                        .Where(o => o.UserId == userId);
+        return Task.FromResult(result);
     }
 
     public async Task ExecuteOrder(OrderEntity order)
@@ -89,5 +87,7 @@ public class OrdersManager(
         _logger.LogInformation("Order {OrderId} executed and removed from active orders.", order.Id);
     }
 
-    public IEnumerable<OrderEntity> GetActiveOrders() => _activeOrdersStore.ActiveOrders.Values;
+    public Task<IEnumerable<OrderEntity>> GetActiveOrdersAsync()
+     => Task.FromResult(_activeOrdersStore.ActiveOrders.Values.AsEnumerable());
+
 }

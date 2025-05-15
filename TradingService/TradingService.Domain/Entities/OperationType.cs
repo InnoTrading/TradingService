@@ -1,4 +1,4 @@
-﻿namespace TradingService.Domain.Entitites;
+﻿namespace TradingService.Domain.Entities;
 
 public enum OperationType
 {
